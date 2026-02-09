@@ -18,6 +18,7 @@ public class ChatService : IChatService
 {
     private readonly IMongoCollection<User> _usersCollection;
     private readonly IMongoCollection<Message> _messagesCollection;
+    private readonly IMongoCollection<Sequence> _sequencesCollection;
 
     public ChatService(IOptions<ChatDatabaseSettings> chatDatabaseSettings)
     {
@@ -32,6 +33,22 @@ public class ChatService : IChatService
 
         _messagesCollection = mongoDatabase.GetCollection<Message>(
             chatDatabaseSettings.Value.MessagesCollectionName);
+            
+        _sequencesCollection = mongoDatabase.GetCollection<Sequence>("Sequences");
+    }
+    
+    private async Task<int> GetNextSequenceValueAsync(string sequenceName)
+    {
+        var filter = Builders<Sequence>.Filter.Eq(s => s.Id, sequenceName);
+        var update = Builders<Sequence>.Update.Inc(s => s.Value, 1);
+        var options = new FindOneAndUpdateOptions<Sequence>
+        {
+            ReturnDocument = ReturnDocument.After,
+            IsUpsert = true
+        };
+
+        var result = await _sequencesCollection.FindOneAndUpdateAsync(filter, update, options);
+        return result.Value;
     }
 
     public async Task<List<User>> GetUsersAsync() =>
@@ -42,13 +59,7 @@ public class ChatService : IChatService
 
     public async Task AddMessageAsync(Message message)
     {
-        // Auto-increment ID strategy (Not ideal for MongoDB but keeping consistent with frontend logic for now)
-        // In production, use ObjectId or a counter collection
-        var lastMessage = await _messagesCollection.Find(_ => true)
-            .SortByDescending(m => m.Id)
-            .FirstOrDefaultAsync();
-            
-        message.Id = (lastMessage?.Id ?? 0) + 1;
+        message.Id = await GetNextSequenceValueAsync("messages");
         
         await _messagesCollection.InsertOneAsync(message);
 
@@ -81,12 +92,9 @@ public class ChatService : IChatService
         var existing = await _usersCollection.Find(u => u.Username == username).FirstOrDefaultAsync();
         if (existing != null) return null;
 
-        var lastUser = await _usersCollection.Find(_ => true).SortByDescending(u => u.Id).FirstOrDefaultAsync();
-        int newId = (lastUser?.Id ?? 0) + 1;
-
         var user = new User
         {
-            Id = newId,
+            Id = await GetNextSequenceValueAsync("users"),
             Username = username,
             Password = password,
             Name = displayName,
